@@ -61,10 +61,20 @@ proc homeVector {vlist} {
 		set v2 [expr $v2*$x]
 }
 
-proc angularError {homeVectorList ssPosX ssPosY} {
-	foreach elem $homeVectorList {
-		set idX ssPosX
+proc angularError {lst} {
+	global ssX ssY angError
+	foreach elem $lst {
+		set xDiffsscv [expr $ssX - [lindex $elem 2]]   #Ideal x value of snapshot - current x
+		set yDiffsscv [expr $ssY - [lindex $elem 3]]
+		set norm [expr ($xDiffsscv * $xDiffsscv) + ($yDiffsscv * $yDiffsscv)]
+		set norm [expr sqrt($norm)]
+		set idX [expr $xDiffsscv / $norm]    
+		set idY [expr $yDiffsscv / $norm]
+
+		set AE [expr arccos($idX*[lindex $elem 0] + $idY*[lindex $elem 1])]
+		set angError [expr $angError + $AE]
 	}
+	set angError [expr $angError / [llength lst]]
 }
 
 set ssX 0
@@ -77,6 +87,8 @@ ip image FINAL [expr 17*$xSmall] [expr 10*$ySmall]
 ip image SCALED
 ip image FILTERED1
 process $ssX\_$ssY FILTERED1
+
+set lst ""
 
 for {set i 0} {$i < 10} {incr i} {
 	for {set j 0} {$j < 17} {incr j} {
@@ -94,6 +106,11 @@ for {set i 0} {$i < 10} {incr i} {
 		set v1 0
 		set v2 0
 		homeVector $vlist
+		set vector {{v1} {v2} {i} {j}}
+
+		lappend lst $vector
+
+		#Drawing Homevector
 		set x1 [expr $j*$xSmall+$xSmall/2]
 		set y1 [expr $i*$ySmall+$ySmall/2]
 		set x2 [expr 40*$v1+$x1]
@@ -111,4 +128,7 @@ for {set i 0} {$i < 10} {incr i} {
 		ip showBWImage input FINAL
 	}
 }
+set angError 0
+angularError $lst
+puts $angError
 

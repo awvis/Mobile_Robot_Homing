@@ -1,0 +1,181 @@
+#PART 1
+
+#Apply all Imageprocessing methods on a selected image
+proc process {imageName outputName} {
+	global sizeX sizeY
+	#load Image
+	ip image RED
+	ip image GREEN
+	ip image BLUE	
+	ip loadPPM RED GREEN BLUE "/homes/vsubramaniansekar/projects/original/$imageName.ppm"
+
+	#convert to black/white
+	ip image GRAY
+	ip rgb2bw RED GREEN BLUE GRAY
+
+	ip image input
+
+	#set inner and outer circle for unwrapping
+	ip image MAPPEDNN
+	set w [ip width GRAY]
+	set h [ip height GRAY]
+	set xc 376
+	set yc 283
+	set r1 86
+	set r2 263
+
+	#unwrapping panoramic image
+	ip polarMapping POLAR $w $h $xc $yc $r1 $r2 b
+	ip mapping GRAY POLAR MAPPEDNN
+	
+	#rescale image for faster computation
+	ip image SCALED
+	ip rescaleMag MAPPEDNN $sizeX $sizeY 0 SCALED
+
+	#apply butterworth-filter
+	ip image $outputName
+	ip butterworth SCALED 0.25 0.0 1 $outputName
+}
+
+#calculate homevector from flowvectors
+proc homeVector {flowVectorList} {
+	global PI sizeX sizeY horizon
+	set hvX 0
+	set hvY 0
+	#calculate the homevector for each flowvector
+	foreach v $flowVectorList {
+		lassign $v pSSX pSSY pCVX pCVY
+		set thetaX [expr ((2*$PI)/$sizeX) * $pSSX]
+		set deltaX [expr ((2*$PI)/$sizeX) * ($pCVX - $pSSX)]
+		set thetaY [expr (0.7/$sizeY) * ($horizon - $pSSY)]
+		set deltaY [expr -((0.7/$sizeY) * ($pCVY - $pSSY))]
+
+		if {[expr abs($thetaY)]>=0.01} {
+			set sdeltaX [expr sin($deltaX)]
+			set cdeltaX [expr cos($deltaX)]
+			set tthetaY [expr tan($thetaY)]
+			set tdeltaY [expr tan($thetaY+$deltaY)]
+			set ttdeltaY [expr $tdeltaY/$tthetaY]
+
+			set beta [expr ($thetaX - atan2($sdeltaX,($ttdeltaY-$cdeltaX))) + $PI]
+			#add up all homevectors calculated from flow vectors
+			set hvX [expr $hvX+cos($beta)]
+			set hvY [expr $hvY+sin($beta)]
+		}
+	}
+	#normalize summed homevector
+	set norm [expr 1/(($hvX*$hvX)+($hvY*$hvY))]
+	set norm [expr sqrt($norm)]
+	set hvX [expr $hvX*$norm]
+	set hvY [expr $hvY*$norm]
+	return [list $hvX $hvY]
+}
+
+#calculate the angular error for given homevectors
+proc angularError {lst ssX ssY} {
+	set angError 0
+	foreach elem $lst {
+		lassign $elem hvX hvY cvX cvY
+  		#Ideal x value of snapshot - current x
+		if {$ssX != $cvX || $ssY != $cvY} {
+			set xDiffsscv [expr -($ssY - $cvY)] 
+			set yDiffsscv [expr $ssX - $cvX]
+			set norm [expr ($xDiffsscv * $xDiffsscv) + ($yDiffsscv * $yDiffsscv)]
+			set norm [expr sqrt($norm)]
+			set idX [expr $xDiffsscv / $norm]    
+			set idY [expr $yDiffsscv / $norm]
+
+			#summ all angular error
+			set AE [expr acos($idX*$hvX + $idY*$hvY)]
+			set angError [expr $angError + $AE]
+		}
+	}
+	set angError [expr $angError / [expr [llength $lst] - 1]]
+	return $angError
+}
+
+#calculate homevectors for a given SS. puts angular error in the end  
+proc main {x y} {
+	global xSmall ySmall horizon sizeX sizeY
+
+	#calculate snapshot-position from mouse position
+	set ssX [expr 9-round(floor($y/80))]
+	set ssY [expr 16-round(floor($x/80))]
+	ip image SCALED
+	ip image FILTERED1
+	#process snapshot
+	process $ssX\_$ssY FILTERED1
+
+	set lst ""
+	
+	#calculate homevector for each other image
+	for {set cvX 9} {$cvX >= 0} {incr cvX -1} {
+		for {set cvY 16} {$cvY >= 0} {incr cvY -1} {
+
+			#uncomment to just subsample
+			#if {($i + $j) % 2} {
+			#	continue
+			#}
+
+			ip image FILTERED2
+			#process current view
+			process $cvX\_$cvY FILTERED2
+				
+			#calculate flowvectors from blockmatching
+			set vlist [ip blockMatching FILTERED1 FILTERED2 0 5 83 6 5 5 5 5 30 30 $horizon]
+
+			#uncomment to draw flowvectors			
+			#foreach a $vlist {
+			#	ip drawLine FILTERED2 [lindex $a 0] [lindex $a 1] [lindex $a 2] [lindex $a 3] 1 1
+			#}	
+			#ip showBWImage input2 FILTERED2
+		
+			#add scaled cv to final image
+			ip image SCALED
+			ip rescaleMag FILTERED2 $xSmall $ySmall 0 SCALED
+			ip insert FINAL SCALED [expr (16-$cvY)*$ySmall] [expr (9-$cvX)*$xSmall] FINAL
+
+			#calculate homevector for cv
+			set hvX 0
+			set hvY 0
+			lassign [homeVector $vlist] hvX hvY
+			set vector "$hvX $hvY $cvX $cvY"
+			lappend lst $vector
+
+			#drawing Homevector
+			set x1 [expr (16-$cvY)*$xSmall+$xSmall/2]
+			set y1 [expr (9-$cvX)*$ySmall+$ySmall/2]
+			set x2 [expr ($xSmall/2)*($hvX)+$x1]
+			set y2 [expr -($ySmall/2)*$hvY+$y1]
+			ip drawLine FINAL $x1 $y1 $x2 $y2 3 1
+
+			#draw a box around scaled image of snapshot
+			if {$ssX == $cvX && $ssY == $cvY} {
+				set x1 [expr (16-$cvY)*$xSmall]
+				set y1 [expr (9-$cvX)*$ySmall]
+				set x2 [expr ((16-$cvY)+1)*$xSmall]
+				set y2 [expr ((9-$cvX)+1)*$ySmall]
+				ip drawBox FINAL $x1 $y1 $x2 $y2 3 1
+			}
+			#show final image
+			ip showBWImage input FINAL
+		}
+	}
+	#calculate angular error
+	set angError [angularError $lst $ssX $ssY]
+	puts $angError
+}
+#Size of processed Images
+set sizeX 415
+set sizeY 40
+
+set horizon 20
+
+#size of the displayed images
+set xSmall 80
+set ySmall 80 
+
+ip image FINAL [expr 17*$xSmall] [expr 10*$ySmall]
+ip showBWImage input FINAL
+#add mouselistener
+bind .imginput.canvas <1> {main %x %y}
