@@ -1,4 +1,4 @@
-**ARhoming** **Autonomous Robotic Engineering**  
+**Mobile Robot - Visual Navigation**
 
 ## **Hardware**  
 Pioneer 3DX Mobile Robot 
